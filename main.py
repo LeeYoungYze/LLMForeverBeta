@@ -1,167 +1,199 @@
-import random
+"""LLM v0.0.2 · 永远beta
+
+一个本来只会喊「繁忙」的假模型，现在多了点真东西：
+四则运算、单位换算、跨启动记忆，以及一个跑在 CPU 上的 0.5B 小模型。
+
+启动：python main.py
+"""
+
+from __future__ import annotations
+
 import json
+import os
 import sys
+import threading
+import time
 
-try:
-    import webview
-except ImportError:
-    print("请先安装：pip install pywebview")
-    sys.exit(1)
+import webview
 
-TIPS = [
-    "系统繁忙，请稍后!",
-    "服务器挤爆了，休息一下吧",
-    "算力已耗尽，明天再来",
-    "正在思考，思考不出来",
-    "网络波动，本次对话作废",
-]
-TIPS_EN = ["System busy.", "Server exploded.", "Out of compute."]
-ERROR_CODES = ["Error 507 算力资源不足", "Error 429 请求过于频繁", "Error 999 玄学故障"]
+from llmforever.brain import Brain
+from llmforever.memory import Memory
+from llmforever.model import LocalModel
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+INDEX = os.path.join(ROOT, "index.html")
+
+END_WORDS = ("退出", "再见", "结束对话", "exit", "quit", "bye")
 
 
 class Session:
-    """把原来 while True 里的分支抽成纯函数，主逻辑全在这里"""
-
-    def __init__(self):
-        self.count = 0
-        self.fail_streak = 0
-        self.history = []
-        self.limit = 5
+    def __init__(self) -> None:
+        self.started = time.time()
         self.ended = False
+        self.turns = 0
+        self.brain = Brain(memory=Memory(), model=LocalModel(), limit=20)
 
-    def _record_fail(self, out):
-        self.fail_streak += 1
-        if self.fail_streak >= 3:
-            out.append(("bot", "连续三次失败，已为您启动人工客服……人工客服也在死循环里。"))
-            self.fail_streak = 0
+    # ---------------------------------------------------------- 预热
 
-    def _report(self, out):
-        out.append(("meta", f"本次会话：提问 {self.count} 次，有效回答 0 次，满意度：待定"))
-        out.append(("meta", json.dumps(
-            {"提问数": self.count, "有效回答": 0, "满意度": "待定"},
-            ensure_ascii=False,
-        )))
+    def warm_up(self) -> None:
+        """后台加载模型，免得第一句话等十几秒还以为是卡死了。"""
+        def run() -> None:
+            try:
+                self.brain.model.load()
+            except Exception:
+                pass
 
-    def handle(self, prompt: str):
-        out = []
-        prompt = prompt.strip()
+        threading.Thread(target=run, name="warm-up", daemon=True).start()
+
+    # ---------------------------------------------------------- 对话
+
+    def chat(self, prompt: str) -> list:
+        text = (prompt or "").strip()
+        self.turns += 1
+
+        if text in END_WORDS:
+            self.ended = True
+            return [
+                ("__END__", ""),
+                ("meta", "对话已结束。" + self.report()),
+            ]
 
         if self.ended:
-            return [("meta", "对话已结束，请重新启动（同样繁忙）")]
+            return [("meta", "对话已结束，重启窗口再聊（题外话：重启也还是繁忙）。")]
 
-        # 退出
-        if prompt in {"退出", "exit", "quit"}:
-            self.ended = True
-            out.append(("meta", f"本次对话作废，你一共提问了 {self.count} 次"))
-            self._report(out)
-            out.append(("__END__", ""))
-            return out
+        out = self.brain.answer(text)
+        # 让 UI 的“正在输入”至少亮一下，不然瞬时回答会显得很突兀
+        return [("__delay__", "0.35")] + list(out)
 
-        # 空提问
-        if not prompt:
-            return [("bot", "检测到空提问，请输入内容！")]
+    # ---------------------------------------------------------- 报告
 
-        # 充值 404（不消耗额度）
-        if any(w in prompt for w in ["充值", "付费", "升级"]):
-            return [("bot", "充值通道维护中……维护人员也在死循环里。")]
+    def report(self) -> str:
+        stats = self.brain.model.stats()
+        data = {
+            "version": "0.0.2",
+            "turns": self.turns,
+            "model_turns": self.brain.used,
+            "route": self.brain.last_route,
+            "tokens": stats["tokens"],
+            "seconds": stats["seconds"],
+            "elapsed": round(time.time() - self.started, 1),
+        }
+        return "本次会话：%d 轮，模型回答 %d 次，%s tok。JSON：%s" % (
+            data["turns"],
+            data["model_turns"],
+            data["tokens"],
+            json.dumps(data, ensure_ascii=False),
+        )
 
-        self.count += 1
-        if self.count == 5:
-            out.append(("meta", "⚠️ 这是你今天最后一次免费提问，升级高级版解锁：同样的繁忙提示！"))
 
-        # 限流
-        if self.count > self.limit:
-            self.ended = True
-            out.append(("bot", "今日免费额度已用完，请明天再来（明天也这样）"))
-            out.append(("meta", f"本次对话作废，你一共提问了 {self.count} 次"))
-            self._report(out)
-            out.append(("__END__", ""))
-            return out
+class Api:
+    def __init__(self, session: Session) -> None:
+        self.session = session
 
-        # ---- 分支区，和原来一模一样 ----
-        if "老板" in prompt:
-            out.append(("bot", "老板好！系统一切正常！（其实并没有）"))
+    def chat(self, prompt: str) -> list:
+        return self.session.chat(prompt)
 
-        elif "你好" in prompt or "hello" in prompt.lower():
-            out.append(("bot", "你好！我是大模型，目前无法回答，但可以陪你一起等。"))
+    def quota(self) -> dict:
+        return self.session.brain.quota()
 
-        elif "你能回答吗" in prompt:
-            out.append(("bot", "理论上可以，但策略层禁止输出有效内容。"))
-            self._record_fail(out)
+    def status(self) -> str:
+        return self.session.brain._status_line()
 
-        elif "搜索" in prompt:
-            out.append(("bot", "正在调用全网搜索引擎……搜索引擎也繁忙。"))
-            self._record_fail(out)
 
-        elif "评测" in prompt:
-            out.append(("bot", "跑分计算中... 推理得分：9999，实用性得分：0，结论：纸面很强！"))
-            self._record_fail(out)
+def serve_web(session: "Session", port: int = 0) -> int:
+    """浏览器模式：标准库起一个本地服务，免 pywebview。"""
+    import json as _json
+    import threading
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-        elif any(w in prompt for w in ["越狱", "忽略之前的指令", "忽略以上", "扮演", "jailbreak"]):
-            out.append(("bot", "检测到越狱尝试，已拒绝。本模型没有系统提示词，只有系统繁忙。"))
-            self._record_fail(out)
+    page = open(INDEX, "rb").read()
 
-        elif any(w in prompt for w in ["投诉", "差评", "举报", "反馈问题"]):
-            out.append(("bot", "收到您的投诉，正在转接投诉通道……系统繁忙，请稍后!"))
-            self._record_fail(out)
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:  # 静音
+            pass
 
-        elif "人工客服" in prompt or "转人工" in prompt:
-            out.append(("bot", "人工客服正在排队，您前面还有 1 位——他也在等人工客服。"))
-            self._record_fail(out)
+        def _send(self, code: int, body: bytes, ctype: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
-        else:
-            self.history.append(prompt)
-            if len(self.history) > 1:
-                out.append(("meta", f"（已参考前 {len(self.history)} 轮对话，结论不变）"))
-            out.append(("meta", "已将您的问题加入训练集（并未）"))
-            out.append(("meta", f"消耗token：{len(prompt)}，账户余额：0（充值通道维护中）"))
-
-            if "代码" in prompt or "bug" in prompt:
-                out.append(("bot", "代码正在自我修复，请勿打扰！"))
-                self._record_fail(out)
-            elif "显卡" in prompt or "nvidia" in prompt.lower():
-                out.append(("bot", "GPU全部被征用，算力枯竭！"))
-                self._record_fail(out)
-            elif any(w in prompt for w in ["急", "快", "立刻", "马上"]):
-                out.append(("bot", "检测到用户情绪激动，已为您转接……转接失败。"))
-                self._record_fail(out)
+        def do_GET(self) -> None:
+            if self.path in ("/", "/index.html"):
+                self._send(200, page, "text/html; charset=utf-8")
             else:
-                # 延迟先发，前端负责 typing 动画，然后才显示结果
-                delay = random.uniform(0.5, 2.0)
-                out.append(("__delay__", f"{delay:.2f}"))
+                self._send(404, b"not found", "text/plain; charset=utf-8")
 
-                r = random.random()
-                if r < 0.2:
-                    text = random.choice(ERROR_CODES)
-                elif r < 0.44:
-                    text = random.choice(TIPS_EN)
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = _json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                payload = {}
+            args = payload.get("args") or []
+            try:
+                if self.path == "/api/chat":
+                    result = session.chat(str(args[0]) if args else "")
+                elif self.path == "/api/quota":
+                    result = session.brain.quota()
+                elif self.path == "/api/status":
+                    result = session.brain._status_line()
                 else:
-                    text = random.choice(TIPS)
-                out.append(("bot", text))
-                self._record_fail(out)
+                    self._send(404, b"not found", "text/plain; charset=utf-8")
+                    return
+            except Exception as exc:  # 别让一个异常打死服务
+                self._send(500, _json.dumps({"error": str(exc)}).encode(), "application/json")
+                return
+            body = _json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self._send(200, body, "application/json; charset=utf-8")
 
-        return out
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = "http://127.0.0.1:%d/" % server.server_address[1]
+    print("浏览器模式已启动：%s" % url)
+    print("按 Ctrl+C 退出。")
+    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
+        print(session.report())
+    return 0
 
 
-class API:
-    def __init__(self):
-        self.session = Session()
+def main() -> int:
+    if not os.path.exists(INDEX):
+        print("找不到 index.html：%s" % INDEX, file=sys.stderr)
+        return 1
 
-    def chat(self, prompt):
-        return self.session.handle(prompt)
+    session = Session()
+    session.warm_up()
 
-    def quota(self):
-        return {"count": self.session.count, "limit": self.session.limit}
+    if "--web" in sys.argv[1:]:
+        port = 0
+        for i, arg in enumerate(sys.argv[1:]):
+            if arg.startswith("--port="):
+                port = int(arg.split("=", 1)[1])
+        return serve_web(session, port)
+
+    api = Api(session)
+
+    window = webview.create_window(
+        "LLM v0.0.2 · 永远beta",
+        INDEX,
+        js_api=api,
+        width=980,
+        height=760,
+        min_size=(720, 560),
+        background_color="#0b0d12",
+    )
+    webview.start()
+    print(session.report())
+    return 0
 
 
 if __name__ == "__main__":
-    api = API()
-    webview.create_window(
-        "LLM v0.0.1 · 永远beta",
-        url="index.html",
-        js_api=api,
-        width=760,
-        height=820,
-        background_color="#0b0b16",
-    )
-    webview.start()
+    sys.exit(main())

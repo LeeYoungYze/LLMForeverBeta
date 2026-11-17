@@ -1,23 +1,17 @@
-# Python
-__pycache__/
+﻿__pycache__/
 *.py[cod]
-*.egg-info/
 .venv/
-venv/
-
-# PyInstaller 产物
+.vendor/
+models/
 build/
 dist/
-*.spec.bak
-
-# IDE
 .idea/
-.vscode/
-
-# 运行时生成的记忆文件（每个人的都不一样）
 memory.json
-
-# 系统
+memory.json.tmp
+.tmp/
+packages/
+_probe_*.py
+_probe_dl/
+tests/_tmp/
 Thumbs.db
-desktop.ini
-.DS_Store
+_*.py

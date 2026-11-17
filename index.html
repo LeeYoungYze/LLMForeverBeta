@@ -167,18 +167,18 @@
     <div class="brand">
       <div class="logo">LLM</div>
       <div>
-        <div class="title">LLM v0.0.1</div>
-        <div class="subtitle">build: 永远beta · 修复了能回答问题的bug（并未）</div>
+        <div class="title">LLM v0.0.2</div>
+        <div class="subtitle">build: 永远beta · 装了 5 亿参数，终于能答一点了</div>
       </div>
     </div>
     <div class="actions">
-      <div class="quota">免费额度 <b id="quota">5</b>/5</div>
+      <div class="quota">模型额度 <b id="quota">20</b>/20</div>
       <button class="ghost" id="endBtn">结束对话</button>
     </div>
   </header>
   <main id="chat"></main>
   <footer>
-    <input id="input" placeholder="和大模型对话...（输入「退出」也可结束）" autocomplete="off" />
+    <input id="input" placeholder="问点什么：算个题、换算单位、或者随便聊聊…（输入「退出」可结束）" autocomplete="off" />
     <button id="send">发送</button>
   </footer>
 </div>
@@ -221,7 +221,20 @@ function addTyping() {
 }
 
 async function ensureBridge() {
+  // 浏览器模式（python main.py --web）下没有 pywebview，直接走 fetch
+  if (location.protocol === 'http:' || location.protocol === 'https:') return;
   while (!window.pywebview || !window.pywebview.api) await sleep(50);
+}
+
+async function callApi(name, ...args) {
+  if (window.pywebview && window.pywebview.api) return window.pywebview.api[name](...args);
+  const res = await fetch('/api/' + name, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args })
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
 async function handle(raw) {
@@ -235,15 +248,18 @@ async function handle(raw) {
   sendBtn.disabled = true;
 
   await ensureBridge();
+  const thinking = addTyping();
   let result;
   try {
-    result = await window.pywebview.api.chat(prompt);
+    result = await callApi('chat', prompt);
   } catch (e) {
+    thinking.remove();
     addMsg("Python 后端异常：" + e, 'meta');
     state.busy = false;
     sendBtn.disabled = false;
     return;
   }
+  thinking.remove();
 
   for (const item of result) {
     const kind = item[0];
@@ -261,7 +277,7 @@ async function handle(raw) {
     addMsg(text, kind);
   }
 
-  const q = await window.pywebview.api.quota();
+  const q = await callApi('quota');
   quotaEl.textContent = Math.max(0, q.limit - q.count);
 
   state.busy = false;
@@ -284,8 +300,8 @@ input.addEventListener('keydown', e => {
   }
 });
 
-addMsg("使用本服务即表示您同意：本模型有权不回答任何问题。", 'meta');
-addMsg("你好，我是 LLM v0.0.1。有什么可以帮你的吗？（大概率帮不了）", 'bot');
+addMsg("使用本服务即表示您同意：本模型有权在没把握的时候说不知道。", 'meta');
+addMsg("你好，我是 LLM v0.0.2。算术、单位换算、记事儿、还有点常识——这次可能真答得上来。", 'bot');
 input.focus();
 </script>
 </body>
