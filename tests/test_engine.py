@@ -151,6 +151,18 @@ class BrainTest(unittest.TestCase):
         reply = self.brain.answer("我要投诉")[-1][1]
         self.assertIn("工单", reply)
 
+    def test_insult_route_is_deterministic(self):
+        self.brain.model.available = lambda: True  # 就算模型在，也不许它答
+        reply = self.brain.answer("那也没见你多聪明啊")[-1][1]
+        self.assertEqual(self.brain.last_route, "insult")
+        self.assertNotIn("谢谢夸奖", reply)
+        self.assertEqual(self.brain.used, 0)
+
+    def test_insult_does_not_hijack_real_questions(self):
+        reply = self.brain.answer("12*(3+4) 等于多少")[-1][1]
+        self.assertIn("= 84", reply)
+        self.assertEqual(self.brain.last_route, "arith")
+
     def test_quota_counts_only_model(self):
         for _ in range(5):
             self.brain.answer("1+1")

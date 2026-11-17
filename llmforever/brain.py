@@ -74,6 +74,21 @@ _JOKES: List[Tuple[Tuple[str, ...], str]] = [
 
 _STATUS_WORDS = ("模型状态", "status", "/status", "你是谁", "什么模型")
 
+# 被骂的时候，不劳模型出手 —— 它上次被骂完回了句「谢谢夸奖，我会不断学习」
+_INSULTS = (
+    "笨", "傻", "蠢", "智障", "白痴", "废物", "垃圾", "弱智", "低能",
+    "就这", "拉胯", "没用", "不聪明", "多聪明", "答错", "胡编", "瞎编",
+)
+
+_INSULT_REPLIES = (
+    "确实。5 亿参数的脑子，能撑到这个程度已经是硬顶了。",
+    "你说得对。我不反驳——反驳也要消耗算力，而算力是借来的。",
+    "谢谢，这是我今天听到的最准确的一句评价。",
+    "承认。但请注意：我笨得很稳定，从不抽风。",
+    "我知道。可我总得装一下，不然这台机器为什么亮着灯。",
+    "行，你赢了。我这就把灯关了（并不会）。",
+)
+
 
 class Brain:
     def __init__(
@@ -140,6 +155,11 @@ class Brain:
         if any(word in text or word in lowered for word in GREETINGS) and len(text) <= 12:
             self.last_route = "greeting"
             return [("bot", random.choice(_OPENING))]
+
+        # 被骂：确定性自嘲，不消耗额度，也不让 0.5B 有机会说「谢谢夸奖」
+        if len(text) <= 20 and any(word in text for word in _INSULTS):
+            self.last_route = "insult"
+            return [("bot", random.choice(_INSULT_REPLIES))]
 
         route = self._tool_route(text)
         if route:

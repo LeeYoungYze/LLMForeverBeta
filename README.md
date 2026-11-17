@@ -10,6 +10,7 @@
 | 单位换算（长度/质量/时间/面积/体积/数据/温度） | `llmforever/units.py` | 否 | 确定 |
 | 记事儿（名字、年龄、城市、生日、喜好、备注） | `llmforever/memory.py` | 否 | 写盘，重启还在 |
 | 小知识库（约 150 条手写常识） | `llmforever/knowledge.py` | 否 | 高分命中才用，宁可不说也不瞎说 |
+| 被骂、被质疑 | `llmforever/brain.py`（确定性自嘲） | 否 | 认，但嘴硬 |
 | 开放问题、闲聊、常识 | Qwen2.5-0.5B-Instruct（本地 CPU） | 是 | 5 亿参数，别指望太多 |
 | 繁忙、越狱、投诉、人工客服 | `llmforever/brain.py`（彩蛋） | 否 | 祖传艺能，保留 |
 
